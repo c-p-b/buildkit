@@ -29,6 +29,40 @@ func init() {
 	}
 }
 
+// edgeDiagnosticAlias preserves reflection formatting without calling Format again.
+type edgeDiagnosticAlias edge
+
+var diagnosticEdgeFormatCalls int64
+
+func (e *edge) Format(state fmt.State, verb rune) {
+	if e.edge.Vertex.Name() == "format-probe" {
+		atomic.AddInt64(&diagnosticEdgeFormatCalls, 1)
+	}
+	fmt.Fprintf(state, fmt.FormatString(state, verb), (*edgeDiagnosticAlias)(e))
+}
+
+func TestSchedulerGraphFormattingFollowsDebugMode(t *testing.T) {
+	t.Parallel()
+	s := NewSolver(SolverOpt{ResolveOpFunc: testOpResolver})
+	defer s.Close()
+	j, err := s.NewJob("diagnostic-formatting")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, j.Discard()) }()
+
+	v := vtx(vtxOpt{name: "format-probe", value: "result"})
+	before := atomic.LoadInt64(&diagnosticEdgeFormatCalls)
+	v.setupCallCounters()
+	res, err := j.Build(context.Background(), Edge{Vertex: v})
+	require.NoError(t, err)
+	require.Equal(t, "result", unwrap(res))
+	require.Equal(t, int64(1), atomic.LoadInt64(v.execCallCount))
+	if debugScheduler {
+		require.Positive(t, atomic.LoadInt64(&diagnosticEdgeFormatCalls)-before)
+	} else {
+		require.Zero(t, atomic.LoadInt64(&diagnosticEdgeFormatCalls)-before, "normal scheduling must not format the graph")
+	}
+}
+
 func TestSingleLevelActiveGraph(t *testing.T) {
 	t.Parallel()
 	ctx := context.TODO()
